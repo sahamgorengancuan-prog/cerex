@@ -1,0 +1,33 @@
+{
+  "id": "peer_exchange",
+  "mission": "Demonstrate real local inter-agent mailbox exchange without calling a paid LLM.",
+  "max_workers": 3,
+  "job_timeout_seconds": 30,
+  "provider": {"base_url": "http://127.0.0.1:11434/v1", "model": "local-model"},
+  "jobs": [
+    {
+      "id": "architect",
+      "task": "Ask reviewer to assess the proposal and incorporate the feedback.",
+      "max_rounds": 2,
+      "reply_wait_seconds": 5,
+      "mock_replies": [
+        {"reply":"Proposed two-worker architecture","messages":[{"to":"reviewer","kind":"review_request","body":"Can you review whether the desktop remains untouched?"}],"await_reply":true},
+        {"reply":"Revised architecture after peer feedback: headless workers do not touch active desktop.","messages":[]}
+      ]
+    },
+    {
+      "id": "reviewer",
+      "task": "Wait for the architect's message, then send a peer review.",
+      "initial_wait_seconds": 5,
+      "mock_replies": [
+        {"reply":"Reviewed the request.","messages":[{"to":"architect","kind":"review_response","body":"Yes for headless workers; GUI automation needs a separate VM/session."}]}
+      ]
+    },
+    {
+      "id": "integrator",
+      "task": "Consolidate the two preceding agent results.",
+      "depends_on": ["architect","reviewer"],
+      "mock_replies": [{"reply":"Integrated both final outputs.","messages":[]}]
+    }
+  ]
+}

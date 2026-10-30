@@ -1,0 +1,37 @@
+{
+  "id": "demo_pipeline",
+  "mission": "Develop an application safely without interrupting the primary desktop.",
+  "max_workers": 3,
+  "job_timeout_seconds": 120,
+  "provider": {
+    "base_url": "http://127.0.0.1:11434/v1",
+    "model": "local-model",
+    "key_env": "CEREX_LLM_API_KEY"
+  },
+  "jobs": [
+    {
+      "id": "architect",
+      "task": "Create a modular technical architecture for the product."
+    },
+    {
+      "id": "researcher",
+      "task": "Identify key implementation and security considerations."
+    },
+    {
+      "id": "reviewer",
+      "task": "Review both outputs and write an actionable implementation summary.",
+      "depends_on": [
+        "architect",
+        "researcher"
+      ]
+    }
+  ],
+  "resource_policy": {
+    "max_cpu_percent": 80,
+    "max_ram_percent": 85,
+    "min_disk_free_gb": 5,
+    "battery_floor_percent": 30,
+    "available_ram_gb_per_worker": 2,
+    "logical_cpu_fraction_for_agents": 0.5
+  }
+}
