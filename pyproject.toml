@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "cerex-pc-agentic-core"
-version = "0.3.2"
+version = "0.4.0"
 description = "Local PC agent engine for CereX: diagnostics, resource-aware sandboxed agents, inter-agent bus. Contains no language model; commanded by the user's own LLM via the CereX connector."
 requires-python = ">=3.10"
 dependencies = []

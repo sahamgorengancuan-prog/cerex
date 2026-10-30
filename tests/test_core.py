@@ -224,3 +224,14 @@ class OrchestratorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionTests(unittest.TestCase):
+    def test_import_and_guard(self):
+        import shutil
+        from cerex_core.session import RemoteSession, SessionError
+        if shutil.which("Xvfb") and shutil.which("ffmpeg") and shutil.which("xdotool"):
+            self.skipTest("display tools present; full session test runs on the device")
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SessionError):
+                RemoteSession(td).start()
