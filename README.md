@@ -1,114 +1,107 @@
-# CereX PC Agentic Core (separate, repo-ready MVP)
+# CereX PC Agentic Core
 
-**Status: pre-alpha developer prototype, 30 October 2026.** This is a **new, separate codebase** for CereX's future *Localize Agentic in Your PC* engine, not a claim that the released CereX web UAT already supports these features. It does not replace or modify the existing CereX package, its VPS service, or the active Windows desktop.
+**Status: developer prototype, 30 October 2026.** This is the local PC engine for CereX. It is
+the "hands" that run on a user's computer. **CereX contains no language model.** The "brain" is
+whatever LLM the user already uses (ChatGPT, Claude, …), which connects to CereX through the CereX
+cloud connector and commands the PC. CereX diagnoses the machine, spawns the right number of
+sandboxed agents, runs the allowlisted tools each agent is told to run, lets agents hand work to
+each other, and reports everything back — with a full log of which LLM asked for what.
 
-## What works now
+## The model in one picture
 
-1. **PC Intelligence** (`doctor`): read-only CPU/RAM/disk/battery/process assessment; predicts a conservative worker count; defers tasks when load is high. It does not change BIOS, registry, security tooling, power plans or user processes.
-2. **No desktop intrusion**: agent workers are separate low-priority background *processes*, use unique job workspaces, and do not call a GUI automation API or send keyboard/mouse input. **Process separation is not a security sandbox.** GUI agents are rejected until an actual independent VM/desktop/session backend exists.
-3. **Job separation**: validated DAG dependencies, concurrent dispatch subject to PC pressure, bounded per-job timeouts, individual result JSON and aggregated mission status.
-4. **Agent <-> agent**: SQLite WAL inbox with sender, recipient, acknowledgement and persistent messages. A worker may send a peer request, await an answer and ask the LLM a second time with peer feedback.
-5. **Agent <-> LLM**: provider-agnostic OpenAI-compatible chat-completions gateway. Offline mock mode is the default, and `--live` is required for actual model requests. API keys are read from an environment variable, not written into a repository config.
-6. **No arbitrary host shell execution from model replies.** LLM responses are data-only. Docker/VM/Windows sandbox integration is future work.
-
-## Quick start on Windows 10/11
-
-Install Python 3.10+ and open this folder in Terminal. Recommended:
-
-```powershell
-py -3 -m pip install psutil
-py -3 -m cerex_core doctor --max-workers 4
-py -3 -m cerex_core plan --config configs/mission_demo.json
-py -3 -m cerex_core run --config configs/mission_interagent_demo.json
-py -3 -m cerex_core inbox --agent orchestrator
+```text
+  Your LLM (ChatGPT / Claude / API)         ← the brain, not part of CereX
+        │  connector (MCP, outbound)
+  CereX Cloud  ── device registry · per-LLM agent ownership · full log
+        │  outbound connection from your PC
+  CereX PC agent (this engine)
+        ├── doctor      read-only CPU/RAM/GPU/disk/battery → recommended agent count
+        ├── orchestrator resource-aware DAG of agents, parallel, cancellable
+        ├── executor    one process per agent: runs ordered sandboxed tool steps
+        ├── sandbox     allowlisted programs only, per-agent workspace, CPU/RAM/time caps
+        └── bus         inter-agent messages + shared handoff folder
 ```
 
-You may also double-click `DIAGNOSE_PC_WINDOWS.bat` or `TEST_OFFLINE_WINDOWS.bat`. The offline tests never call a remote LLM. Diagnostics never transmit data outside your PC. On Windows, worker processes request a no-console, below-normal-priority start.
+Each agent gets a unique handle (e.g. `CX-demo_pip-01`) so the LLM can address specific agents in
+parallel and they can message one another.
 
-### Real LLM activation (explicit opt-in)
+## What CereX is and is not
 
-For a local OpenAI-compatible model server, e.g. an Ollama installation exposing `/v1/chat/completions`:
+- **No model inside.** There is no API key, no prompt, no inference in this engine. It only
+  executes instructions an authorized LLM sends through the connector.
+- **No arbitrary shell.** An agent step is a program from the device **allowlist** plus arguments —
+  never a shell string. Shells and privilege tools (`sh`, `bash`, `sudo`, `ssh`, …) are refused
+  even if an owner lists them.
+- **Sandboxed.** Each agent runs in its own workspace with a minimal environment (the host's
+  environment and secrets are never passed through) and hard CPU, memory, wall-clock, output and
+  file-size limits.
+- **Owner in control.** The agent runs only after the PC owner installs and pairs it. It does not
+  hide from Task Manager or antivirus and does not auto-start unless the owner enables it. (Pairing,
+  the visible status indicator, the global Stop control and remote sessions live in the CereX cloud
+  layer, not in this core.)
+- **Logged.** Every agent, step, exit code and peer message is recorded.
 
-```powershell
-$env:CEREX_LLM_BASE_URL = "http://127.0.0.1:11434/v1"
-$env:CEREX_LLM_MODEL = "YOUR_LOCAL_MODEL"
-# Set provider.base_url and provider.model in your JSON mission too.
-py -3 -m cerex_core run --config configs/mission_demo.json --root .cerex-runs/live1 --live
+## Quick start
+
+```bash
+python -m pip install psutil          # optional, improves diagnostics
+python -m cerex_core doctor --max-agents 4
+python -m cerex_core tools            # show the sandbox allowlist on this machine
+python -m cerex_core plan --config configs/mission_demo.json
+python -m cerex_core run  --config configs/mission_demo.json
+python -m cerex_core inbox --agent orchestrator
 ```
 
-Or configure an **HTTPS** OpenAI-compatible provider and set its API key only in a private environment variable:
+The demo missions use only `python3`, so they run anywhere. A real task (say a 3D render) would
+allowlist `blender` and `ffmpeg` and the LLM would send those commands.
 
-```powershell
-$env:CEREX_LLM_API_KEY = "YOUR_KEY_FROM_SECRET_MANAGER"
-# Edit configs/mission_demo.json provider.base_url and model to match provider.
-py -3 -m cerex_core run --config configs/mission_demo.json --root .cerex-runs/live2 --live
+## Mission shape
+
+```json
+{
+  "id": "demo_pipeline",
+  "goal": "human/LLM description — never executed",
+  "owner_llm": "chatgpt",
+  "max_workers": 3,
+  "agent_timeout_seconds": 60,
+  "sandbox": {"allowlist": ["python3", "blender", "ffmpeg"], "cpu_seconds": 600, "memory_mb": 4096},
+  "agents": [
+    {"id": "planner", "role": "Write the scene plan",
+     "steps": [{"command": ["python3", "plan.py"]}]},
+    {"id": "reviewer", "role": "Review once the plan exists",
+     "depends_on": ["planner"],
+     "steps": [{"command": ["python3", "-c", "..."]}],
+     "messages": [{"to": "planner", "kind": "note", "body": "looks good"}]}
+  ]
+}
 ```
 
-Model API requests may incur cost. No API key is needed for offline demos. This MVP has no production-grade cost metering or spending cap; use a provider-side limit before real use. Avoid company/confidential materials until access controls and DLP are completed.
+Agents share files through the `CEREX_SHARED` folder (injected into every step's environment);
+each agent's own `CEREX_WORKSPACE` is its private working directory.
 
-## Run automated tests
+## Run tests
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-## Architecture
-
-```text
-USER / CereX Web UI (future integration)
-          |
-  CereX Mission Orchestrator
-    |          |         |
- PC doctor   DAG jobs   Resource policy
-    |          |         |
-    +---- Low-priority OS worker processes ----+
-         |             |                      |
-  Architect agent   Reviewer agent       Integrator agent
-         +-------------+----------------------+
-                    SQLite event bus
-                         |
-                Pluggable LLM Gateway
-                   Local or HTTPS
-```
-
-Each worker gets a directory and receives only the input task, dependency results, and its own mailbox. The model can ask other agents for input and request another reasoning round after a reply. A worker is **not** automatically allowed to execute scripts or navigate a real desktop.
-
-## Current limitations (important)
-
-- **Actual customer PC diagnosis:** not performed; the remote Windows nodes reported OFFLINE on 2026-10-30. The doctor command must run on that PC to report its live condition.
-- **No real desktop/session isolation:** headless jobs are non-intrusive; graphical tasks require a separately authorized VM/session and a verified isolation test. Even low-priority host processes can still compete for shared CPU/RAM.
-- **Not an OS security sandbox:** workers share host user permissions. No arbitrary code execution, browser/file-editing tools or privileged automation are implemented.
-- **No remote CereX web API wiring:** this is a repository-ready local core module. See `docs/INTEGRATION_CONTRACT.md` for proposed APIs.
-- **No mature retry policy, budget guard, remote policy sync, credentials vault, log redaction, agent plugin permissions, or Windows release test.** The LLM gateway is only a compatible endpoint adapter, not a guarantee of interoperability with every provider.
-- **No background service installed** and no startup/scheduled tasks created.
-
 ## Layout
 
-- `cerex_core/doctor.py` - hardware/load snapshot and safe capacity policy
-- `cerex_core/orchestrator.py` - DAG scheduler and process separation
-- `cerex_core/worker.py` - headless worker with multi-round peer feedback
-- `cerex_core/bus.py` - persistent local messages
-- `cerex_core/gateway.py` - model adapter and response parsing
-- `configs/` - customizable mission examples
-- `tests/` - offline regression suite
-- `docs/` - architectural requirements, integration, OSS references and next milestones
+- `cerex_core/doctor.py` — read-only PC snapshot and safe agent-count recommendation
+- `cerex_core/sandbox.py` — allowlisted, resource-limited tool execution
+- `cerex_core/executor.py` — one agent process: runs its sandboxed steps, uses the bus
+- `cerex_core/orchestrator.py` — resource-aware agent DAG, parallelism, cancel, progress
+- `cerex_core/bus.py` — durable inter-agent messages
+- `cerex_core/http_api.py` — authenticated localhost-only device API (experimental)
+- `configs/` — example missions
+- `tests/` — offline regression suite
+- `docs/` — architecture, integration contract, milestones
 
-**Security statement:** a background process != an isolated interactive desktop != a sandbox. CereX must not market those as equivalent.
+## Current limitations
 
-## Experimental authenticated localhost API
-
-To expose local read-only diagnostics and mission management to a **future** authenticated CereX device connector, set a random 24+ character token privately, then run the loopback server. It deliberately refuses public/LAN binding and external model calls by default.
-
-```powershell
-$env:CEREX_CORE_TOKEN = "REPLACE_WITH_A_LONG_RANDOM_LOCALLY_GENERATED_TOKEN"
-py -3 -m cerex_core serve --port 8717
-```
-
-Requests must use `Authorization: Bearer <your-token>`:
-
-- `GET http://127.0.0.1:8717/health` (authenticated)
-- `GET http://127.0.0.1:8717/diagnostics` (authenticated)
-- `POST http://127.0.0.1:8717/missions` body `{"mission": <JSON mission config>, "live": false}`
-- `GET http://127.0.0.1:8717/missions/<id>` (authenticated)
-
-Do not expose this localhost API to the Internet using an unrestricted reverse proxy. The CereX cloud/device authentication bridge and signed requests are future work. This server is experimental and is not automatically started at login.
+- Remote desktop/GUI control (TeamViewer-style layered sessions) is **not** in this core; it
+  requires a separately authorized isolated-session backend and lives in the cloud layer.
+- The sandbox is process-level isolation with resource limits — not a full OS/VM security boundary.
+  Agents run under the host user's permissions. For untrusted tool execution, add per-agent
+  container/VM isolation.
+- Pairing, OAuth connector, device registry and the live monitor are in the CereX cloud layer.

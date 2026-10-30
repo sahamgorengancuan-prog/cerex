@@ -24,6 +24,21 @@ def _windows_memory():
     return None
 
 
+def _gpus():
+    """Best-effort GPU name list via vendor CLIs already on PATH. Never installs anything."""
+    names = []
+    smi = shutil.which("nvidia-smi")
+    if smi:
+        try:
+            import subprocess
+            out = subprocess.run([smi, "--query-gpu=name", "--format=csv,noheader"],
+                                 capture_output=True, text=True, timeout=4)
+            names += [l.strip() for l in out.stdout.splitlines() if l.strip()]
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return names[:8]
+
+
 def snapshot(path=None):
     """No privileged reads, process details, credentials, telemetry or network calls."""
     p = Path(path or Path.home())
@@ -54,7 +69,15 @@ def snapshot(path=None):
             "ram": mem, "disk": {"free_gb": round(disk.free / 1024**3, 2),
                                      "used_percent": disk_pct},
             "battery": battery, "process_count": process_count,
+            "gpus": _gpus(),
             "psutil_installed": cpu_percent is not None}
+
+
+def recommend(max_agents=4, path=None, policy=None):
+    """Convenience for the CereX connector: a PC snapshot plus a safe agent-count recommendation.
+    The commanding LLM reads this to decide how many agents to create for a task."""
+    snap = snapshot(path)
+    return {"snapshot": snap, "assessment": assessment(snap, max_agents, policy)}
 
 
 def assessment(snap, limit=4, policy=None):
