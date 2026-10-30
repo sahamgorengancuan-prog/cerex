@@ -25,7 +25,12 @@ def main():
     api = sub.add_parser("serve", help="Authenticated localhost-only device API (experimental)")
     api.add_argument("--port", type=int, default=8717)
     api.add_argument("--root", default=".cerex-runs/service")
-    args = parser.parse_args()
+    sub.add_parser("connect", help="Connect this PC to CereX cloud and run missions the owner's LLM sends", add_help=False)
+    args, _ = parser.parse_known_args()
+    if args.command == "connect":
+        from .connect import main as connect_main
+        import sys
+        return connect_main(sys.argv[2:])
     if args.command == "serve":
         from .http_api import serve
         serve(port=args.port, root=args.root)
