@@ -42,7 +42,12 @@ class Client:
 
     def heartbeat(self):
         try:
+            from . import __version__
             diag = recommend(self.limits.get("max_agents", 4))
+            # Report the owner-set allowlist and limits so the cloud and the commanding LLM can
+            # see exactly which tools this device will accept, before sending any command.
+            diag["cerex_agent"] = {"version": __version__, "allowlist": self.allowlist,
+                                   "limits": self.limits}
             return self._call("POST", "/device/heartbeat", {"snapshot": diag})
         except (HTTPError, URLError, ValueError, OSError):
             return None
