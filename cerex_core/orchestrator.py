@@ -43,7 +43,10 @@ def validate(config):
     return jobs
 
 
-async def run(config, root, live=False, detector=None):
+async def run(config, root, live=False, detector=None, env=None, cancel=None, on_update=None):
+    """env: worker environment (e.g. a per-mission API key) instead of inheriting this process.
+    cancel: callable polled while jobs run; True kills active workers.
+    on_update: callable receiving a copy of job statuses after each change."""
     jobs=validate(config)
     root=Path(root).resolve()
     root.mkdir(parents=True,exist_ok=True)
@@ -62,6 +65,12 @@ async def run(config, root, live=False, detector=None):
     mission_id=config.get("id","mission")
     if not isinstance(mission_id,str) or not JOB_ID.fullmatch(mission_id):
         raise ValueError("Invalid mission ID")
+    procs={}
+    cancelled=False
+    def notify():
+        if on_update:
+            try: on_update(dict(statuses))
+            except Exception: pass
     async def spawn(job):
         name=job["id"]
         directory=root/"workspaces"/name
@@ -74,13 +83,18 @@ async def run(config, root, live=False, detector=None):
         spec_file.write_text(json.dumps(spec,ensure_ascii=False,indent=2),encoding="utf-8")
         kw={"cwd":str(Path(__file__).resolve().parent.parent),"stdout":asyncio.subprocess.PIPE,
             "stderr":asyncio.subprocess.PIPE}
+        if env is not None:
+            kw["env"]=dict(env)
         if os.name == "nt":
             kw["creationflags"]=getattr(subprocess,"CREATE_NO_WINDOW",0)|getattr(subprocess,"BELOW_NORMAL_PRIORITY_CLASS",0)
         proc=await asyncio.create_subprocess_exec(sys.executable,"-m","cerex_core.worker","--spec",str(spec_file),**kw)
-        statuses[name]="running"
+        procs[name]=proc
+        statuses[name]="running"; notify()
         try:
             out,err=await asyncio.wait_for(proc.communicate(),timeout=int(config.get("job_timeout_seconds",120)))
-            if proc.returncode:
+            if cancelled:
+                failures[name]={"reason":"cancelled"}; statuses[name]="cancelled"
+            elif proc.returncode:
                 failures[name] = {"exit_code":proc.returncode,"stderr_tail":err.decode(errors="replace")[-600:]}
                 statuses[name]="failed"
             else:
@@ -90,15 +104,26 @@ async def run(config, root, live=False, detector=None):
         except asyncio.TimeoutError:
             proc.kill(); await proc.communicate()
             failures[name] = {"reason":"timeout"}; statuses[name]="failed"
+        finally:
+            procs.pop(name,None); notify()
     while any(s in ("pending","running") for s in statuses.values()):
+        if cancel and not cancelled and cancel():
+            cancelled=True
+            for p in list(procs.values()):
+                if p.returncode is None:
+                    try: p.kill()
+                    except ProcessLookupError: pass
+            for k,v in statuses.items():
+                if v=="pending": statuses[k]="cancelled"
+            notify()
+            if not active: break
         ready=[j for j in jobs if statuses[j["id"]]=="pending" and all(statuses[d]=="completed" for d in j.get("depends_on",[]))]
-        blocked=[j for j in jobs if statuses[j["id"]]=="pending" and any(statuses[d] in ("failed","skipped") for d in j.get("depends_on",[]))]
+        blocked=[j for j in jobs if statuses[j["id"]]=="pending" and any(statuses[d] in ("failed","skipped","cancelled","deferred") for d in j.get("depends_on",[]))]
         for j in blocked: statuses[j["id"]]="skipped"
-        if ready and len(active) < resource["recommended_workers"]:
+        if blocked: notify()
+        if ready and not cancelled and len(active) < resource["recommended_workers"]:
             updated=assessment(detector(),worker_limit,config.get("resource_policy",{}))
-            if updated["recommended_workers"] == 0:
-                for j in ready: statuses[j["id"]]="deferred"
-                break
+            # Under pressure, start nothing new; already running workers finish first.
             capacity=min(resource["recommended_workers"],updated["recommended_workers"])-len(active)
             for j in ready[:max(0,capacity)]:
                 active[j["id"]]=asyncio.create_task(spawn(j))
@@ -106,13 +131,15 @@ async def run(config, root, live=False, detector=None):
             if any(s=="pending" for s in statuses.values()):
                 for k,v in statuses.items():
                     if v=="pending": statuses[k]="deferred"
+                notify()
             break
-        done,_=await asyncio.wait(active.values(),return_when=asyncio.FIRST_COMPLETED)
+        done,_=await asyncio.wait(active.values(),return_when=asyncio.FIRST_COMPLETED,timeout=0.5 if cancel else None)
         for k,v in list(active.items()):
             if v in done:
                 await v
                 del active[k]
-    final={"status":"completed" if all(x=="completed" for x in statuses.values()) else "partial",
+    overall="cancelled" if cancelled else "completed" if all(x=="completed" for x in statuses.values()) else "partial"
+    final={"status":overall,
            "resource":resource,"jobs":statuses,"results":results,"failures":failures,
            "root":str(root),"mode":"live" if live else "mock"}
     (root/"mission-result.json").write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding="utf-8")

@@ -86,8 +86,43 @@ class OrchestratorTests(unittest.TestCase):
             outcome=asyncio.run(run(config,td,detector=lambda:sample(cpu=98)))
             self.assertEqual(outcome["status"],"deferred")
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_cancel_kills_workers_and_skips_dependents(self):
+        import time
+        with tempfile.TemporaryDirectory() as td:
+            config={"jobs":[{"id":"slow","task":"wait","initial_wait_seconds":10},
+                            {"id":"after","task":"next","depends_on":["slow"]}]}
+            started=time.monotonic()
+            updates=[]
+            outcome=asyncio.run(run(config,td,detector=lambda:sample(),
+                                    cancel=lambda:time.monotonic()-started>0.8,on_update=updates.append))
+            self.assertEqual(outcome["status"],"cancelled")
+            self.assertEqual(outcome["jobs"]["slow"],"cancelled")
+            self.assertIn(outcome["jobs"]["after"],("cancelled","skipped"))
+            self.assertLess(time.monotonic()-started,6)
+            self.assertTrue(any(u.get("slow")=="running" for u in updates))
+
+    def test_explicit_worker_environment(self):
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            config={"jobs":[{"id":"alpha","task":"do this"}]}
+            env={"PATH":os.environ.get("PATH",""),"PYTHONUTF8":"1"}
+            outcome=asyncio.run(run(config,td,detector=lambda:sample(),env=env))
+            self.assertEqual(outcome["status"],"completed")
+            self.assertEqual(outcome["results"]["alpha"]["usage"]["requests"],0)
+
+class GatewayHardeningTests(unittest.TestCase):
+    def test_server_mode_rejects_loopback_http(self):
+        LLMGateway(base_url="http://127.0.0.1:11434/v1")
+        with self.assertRaises(GatewayError):
+            LLMGateway(base_url="http://127.0.0.1:11434/v1",allow_loopback=False)
+
+    def test_max_tokens_bounds(self):
+        with self.assertRaises(GatewayError):
+            LLMGateway(base_url="https://api.example.com/v1",max_tokens=1)
+        self.assertEqual(LLMGateway(base_url="https://api.example.com/v1",max_tokens=900).max_tokens,900)
+
+    def test_parse_plain_fence(self):
+        self.assertEqual(parse_agent_reply('```\n{"reply":"fenced"}\n```')["reply"],"fenced")
 
 class HttpApiTests(unittest.TestCase):
     def test_authenticated_loopback_roundtrip(self):

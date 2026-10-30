@@ -24,7 +24,9 @@ def work(spec):
     workspace.mkdir(parents=True,exist_ok=True)
     provider={**spec["provider"], **job.get("provider",{})}
     gateway=LLMGateway(provider.get("base_url"), job.get("model") or provider.get("model"),
-                       provider.get("key_env","CEREX_LLM_API_KEY"),bool(spec.get("live")))
+                       provider.get("key_env","CEREX_LLM_API_KEY"),bool(spec.get("live")),
+                       max_tokens=provider.get("max_tokens"),
+                       allow_loopback=provider.get("allow_loopback",True) is not False)
     system=("You are a CereX local background worker. Do not issue host commands, GUI actions, credential requests, "
             "or tools. Respond as JSON object with 'reply' string, optional 'messages' list of "
             "{'to':agent_id,'kind':short_label,'body':short_text}, and optional 'await_reply' boolean. "
@@ -78,7 +80,7 @@ def work(spec):
             break
     output={"job_id":agent,"reply":last_reply,"received_messages":all_received,"messages_sent":all_sent,
             "round_trips":len(history),"history":history,"warnings":warnings,
-            "model":gateway.model,"mode":"live" if spec.get("live") else "mock"}
+            "model":gateway.model,"mode":"live" if spec.get("live") else "mock","usage":gateway.usage}
     (workspace/"result.json").write_text(json.dumps(output,ensure_ascii=False,indent=2),encoding="utf-8")
     mailbox.send(agent,"orchestrator","job_completed",{"job_id":agent,"messages_sent":all_sent})
     return output
